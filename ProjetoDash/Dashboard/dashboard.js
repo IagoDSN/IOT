@@ -1,17 +1,17 @@
 // ================= CONFIG =================
+// Ajuste estas variáveis de acordo com as dimensões reais do seu tanque
 const TANK_HEIGHT_CM = 200;
 const SENSOR_OFFSET_CM = 10;
 const MAX_POINTS = 40;
-const INTERVAL_MS = 1500;
 
 // ================= STATE =================
 let readings = [];
-let connected = true;
+let connected = false; // Começa como falso e muda para true ao conectar no MQTT
 let soundOn = false;
-let targetLevel = 60;
 let prevLevel = 0;
 let chartInstance = null;
 
+// Converte a distância lida pelo sensor para a porcentagem de água no tanque
 function distanceToLevel(distance) {
   const usable = TANK_HEIGHT_CM - SENSOR_OFFSET_CM;
   const waterDepth = Math.max(0, Math.min(usable, TANK_HEIGHT_CM - distance));
@@ -21,13 +21,6 @@ function distanceToLevel(distance) {
 function levelToDistance(level) {
   const usable = TANK_HEIGHT_CM - SENSOR_OFFSET_CM;
   return TANK_HEIGHT_CM - (level / 100) * usable;
-}
-
-// ================= INIT =================
-const now = Date.now();
-for (let i = 0; i < 20; i++) {
-  const distance = 120 + Math.sin(i / 3) * 30;
-  readings.push({ t: now - (20 - i) * 2000, distance, level: distanceToLevel(distance) });
 }
 
 // ================= CHART =================
@@ -98,18 +91,20 @@ const statusMeta = {
 
 function updateUI() {
   const latest = readings[readings.length - 1];
-  const level = latest.level;
-  const distance = latest.distance;
+  
+  // Se não houver leituras ainda, define valores zerados padrão
+  const level = latest ? latest.level : 0;
+  const distance = latest ? latest.distance : 0;
 
-  // Bottle water level
+  // Atualiza o nível de água no SVG da garrafa/reservatório
   const waterGroup = document.getElementById('waterGroup');
   const translateY = 380 - (level / 100) * 360;
   waterGroup.style.transform = `translateY(${translateY}px)`;
 
-  // Big percentage
+  // Grande indicador de porcentagem
   document.getElementById('levelBig').textContent = level + '%';
 
-  // Status badge
+  // Badge de Status
   const status = level <= 30 ? 'low' : level <= 70 ? 'mid' : 'high';
   const meta = statusMeta[status];
   document.getElementById('statusText').textContent = meta.label;
@@ -118,7 +113,7 @@ function updateUI() {
   document.getElementById('statusBadge').style.borderColor = meta.ring;
   document.getElementById('statusDesc').textContent = meta.desc;
 
-  // Alerts
+  // Alertas dinâmicos na tela
   const alertBox = document.getElementById('alertBox');
   alertBox.innerHTML = '';
   if (level >= 85) {
@@ -133,11 +128,11 @@ function updateUI() {
       </div>`;
   }
 
-  // Stats cards
+  // Cards de estatísticas calculadas
   const levels = readings.map(r => r.level);
-  const min = Math.min(...levels);
-  const max = Math.max(...levels);
-  const avg = Math.round(levels.reduce((a, b) => a + b, 0) / levels.length);
+  const min = levels.length ? Math.min(...levels) : 0;
+  const max = levels.length ? Math.max(...levels) : 0;
+  const avg = levels.length ? Math.round(levels.reduce((a, b) => a + b, 0) / levels.length) : 0;
 
   const statsData = [
     { label: 'Nível Atual', value: level + '%', sub: 'Atualizado agora', tone: 'tone-sky', icon: 'gauge' },
@@ -164,22 +159,24 @@ function updateUI() {
     </div>
   `).join('');
 
-  // Chart update
+  // Atualização do gráfico temporal
   if (chartInstance) {
     chartInstance.data.labels = readings.map(r => new Date(r.t).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit', second:'2-digit' }));
     chartInstance.data.datasets[0].data = readings.map(r => r.level);
     chartInstance.update('none');
   }
 
-  // Footer
-  const d = new Date(latest.t);
-  document.getElementById('lastTime').textContent = d.toLocaleTimeString('pt-BR');
-  document.getElementById('lastDate').textContent = d.toLocaleDateString('pt-BR');
+  // Atualizações do Rodapé informativo
+  if (latest) {
+    const d = new Date(latest.t);
+    document.getElementById('lastTime').textContent = d.toLocaleTimeString('pt-BR');
+    document.getElementById('lastDate').textContent = d.toLocaleDateString('pt-BR');
+  }
   document.getElementById('sensorStatus').textContent = connected ? 'Online' : 'Sem sinal';
   document.getElementById('sensorStatus').style.color = connected ? '#059669' : '#e11d48';
   document.getElementById('readingsCount').textContent = readings.length + ' leituras';
 
-  // Connection pill
+  // Pill visual superior de conexão
   const connPill = document.getElementById('connPill');
   if (connected) {
     connPill.className = 'status-pill pill-online';
@@ -189,7 +186,7 @@ function updateUI() {
     connPill.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M16.72 11.06a10.94 10.94 0 0 1 1.57 3.93"/><path d="M14.12 8.42a12.15 12.15 0 0 1 2.2 2.6"/><path d="M9.88 15.58a12.15 12.15 0 0 1-2.2-2.6"/><path d="M5.88 19.42a10.94 10.94 0 0 1-1.57-3.93"/><path d="M1.42 9a16 16 0 0 1 21.16 0"/></svg> Offline`;
   }
 
-  // Sound alert
+  // Alerta sonoro via Web Audio API (Opcional se habilitado pelo botão do usuário)
   if (soundOn && prevLevel < 85 && level >= 85) {
     try {
       const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -207,31 +204,76 @@ function updateUI() {
   prevLevel = level;
 }
 
-// ================= SIMULATION =================
-setInterval(() => {
-  if (Math.random() < 0.15) targetLevel = Math.random() * 100;
+// ================= MQTT WEBSOCKET =================
+const mqttServer = "c28d5a3ca24a4d259fca9e54afea7665.s1.eu.hivemq.cloud";
+const mqttPort = 8884; // Porta WebSocket com SSL segura para o HiveMQ
+const mqttTopic = "HydroMonitor/Ultrassonico";
+const clientId = "WebClient-" + Math.random().toString(16).substr(2, 8);
 
-  const last = readings[readings.length - 1];
-  const currentLevel = last.level;
-  const drift = (targetLevel - currentLevel) * 0.08;
-  const noise = (Math.random() - 0.5) * 3;
-  const nextLevel = Math.max(0, Math.min(100, currentLevel + drift + noise));
-  const distance = levelToDistance(nextLevel);
+const client = new Paho.Client(mqttServer, mqttPort, "/mqtt", clientId);
 
-  readings.push({
-    t: Date.now(),
-    distance: Math.round(distance * 10) / 10,
-    level: Math.round(nextLevel),
-  });
-  if (readings.length > MAX_POINTS) readings.shift();
+client.onConnectionLost = onConnectionLost;
+client.onMessageArrived = onMessageArrived;
 
+const options = {
+  useSSL: true,
+  userName: "Dog_mals",
+  password: "Jurema10",
+  onSuccess: onConnect,
+  onFailure: onFailure,
+  mqttVersion: 4
+};
+
+function connectMQTT() {
+  console.log("Conectando ao MQTT via WebSockets...");
+  client.connect(options);
+}
+
+function onConnect() {
+  console.log("Conectado ao Broker MQTT com Sucesso!");
+  connected = true;
   updateUI();
-}, INTERVAL_MS);
+  client.subscribe(mqttTopic);
+}
 
-setInterval(() => {
-  connected = Math.random() > 0.05;
+function onFailure(responseObject) {
+  console.error("Falha ao se conectar no MQTT: " + responseObject.errorMessage);
+  connected = false;
   updateUI();
-}, 4000);
+  // Tenta reconectar automaticamente em 5 segundos
+  setTimeout(connectMQTT, 5000);
+}
+
+function onConnectionLost(responseObject) {
+  if (responseObject.errorCode !== 0) {
+    console.error("Conexão perdida com o Broker: " + responseObject.errorMessage);
+    connected = false;
+    updateUI();
+    // Tenta reconectar imediatamente
+    setTimeout(connectMQTT, 5000);
+  }
+}
+
+// Executado sempre que o ESP8266 envia um dado para o HiveMQ
+function onMessageArrived(message) {
+  const distanciaCm = parseFloat(message.payloadString);
+  
+  if (!isNaN(distanciaCm)) {
+    const novoNivel = distanceToLevel(distanciaCm);
+    
+    // Adiciona o dado real lido no array de exibição do histórico
+    readings.push({
+      t: Date.now(),
+      distance: Math.round(distanciaCm * 10) / 10,
+      level: Math.round(novoNivel),
+    });
+    
+    // Remove o ponto mais antigo do histórico para manter o limite definido na config
+    if (readings.length > MAX_POINTS) readings.shift();
+    
+    updateUI();
+  }
+}
 
 // ================= CONTROLS =================
 document.getElementById('soundBtn').addEventListener('click', () => {
@@ -243,4 +285,5 @@ document.getElementById('soundBtn').addEventListener('click', () => {
 document.addEventListener('DOMContentLoaded', () => {
   initChart();
   updateUI();
+  connectMQTT(); // Inicializa a escuta real dos dados do ESP
 });

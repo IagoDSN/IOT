@@ -3,42 +3,32 @@
 #include <PubSubClient.h>
 #include <Ultrasonic.h>
 
-
 // ======================
 // WIFI
 // ======================
 const char* ssid = "ifmachado";
 const char* password = "";
 
-
 // ======================
 // HIVEMQ CLOUD
 // ======================
 const char* mqtt_server = "c28d5a3ca24a4d259fca9e54afea7665.s1.eu.hivemq.cloud";
-
-
-const int mqtt_port = 8883;  // Porta criptografada
-
+const int mqtt_port = 8883;  // Porta nativa criptografada para microcontroladores
 
 // ======================
 // USUARIO MQTT
 // ======================
 const char* mqtt_user = "Dog_mals";
 
-
 // ======================
 // SENHA MQTT
 // ======================
 const char* mqtt_password = "Jurema10";
 
-
 // ======================
 // TOPICOS MQTT
 // ======================
 const char* topico = "HydroMonitor/Ultrassonico";
-
-
-
 
 // ======================
 // SENSOR Ultrasonico
@@ -52,11 +42,10 @@ const char* topico = "HydroMonitor/Ultrassonico";
 Ultrasonic ultrasonic(pino_trigger, pino_echo);
 
 // ======================
-// MQTT
+// MQTT CLIENT DEFINITION
 // ======================
-WiFiClientSecure espClient;  //ALTERAÇÃO PARA CLIENTE QUE SUPORTA AUTENTICAÇÃO
+WiFiClientSecure espClient;  
 PubSubClient client(espClient);
-
 
 void setup_wifi() {
   WiFi.begin(ssid, password);
@@ -69,37 +58,20 @@ void setup_wifi() {
   Serial.println("WiFi conectado!");
 }
 
-
-// ======================
-// MQTT
-// ======================
 void reconnect() {
   String clientId = "ESP8266-" + String(ESP.getChipId());
   while (!client.connected()) {
     Serial.print("Conectando MQTT...");
-    // CONEXAO MQTT COM USUARIO E SENHA
-    if (
-      client.connect(
-        clientId.c_str(),
-        mqtt_user,
-        mqtt_password)) {
-
-
+    // Conexão autenticada ao broker cloud
+    if (client.connect(clientId.c_str(), mqtt_user, mqtt_password)) {
       Serial.println(" conectado!");
-
-
     } else {
-
-
       Serial.print("Erro MQTT: ");
       Serial.println(client.state());
-
-
       delay(2000);
     }
   }
 }
-
 
 // ======================
 // SETUP
@@ -107,32 +79,36 @@ void reconnect() {
 void setup() {
   Serial.begin(9600);
   setup_wifi();
-  espClient.setInsecure();  // Ignora a validação da credencial do servidor
+  
+  espClient.setInsecure();  // Ignora a validação rígida de certificado SSL no ESP para simplificar
   client.setServer(mqtt_server, mqtt_port);
 
   pinMode(vermeio, OUTPUT);
   pinMode(relo, OUTPUT);
   pinMode(verdes, OUTPUT);
 
-  Serial.println("Lendo dados do sensor...");
+  Serial.println("Sistema Pronto. Lendo dados do sensor...");
 }
 
-
+// ======================
+// LOOP PRINCIPAL
+// ======================
 void loop() {
   if (!client.connected()) {
     reconnect();
   }
   client.loop();
-  // Variáveis para armazenar seus dados
+
+  // Variáveis para captação física do pulso
   float cmMsec;
   long microsec = ultrasonic.timing();
 
-  //lendo seu dado
-  
+  // Conversão de tempo para centímetros reais
   cmMsec = ultrasonic.convert(microsec, Ultrasonic::CM);
   Serial.print("Distancia em cm: ");
   Serial.println(cmMsec);
 
+  // Lógica de atuação física dos LEDs indicadores locais
   if (cmMsec >= 15) {
     digitalWrite(vermeio, LOW);
     digitalWrite(relo, LOW);
@@ -149,17 +125,12 @@ void loop() {
     digitalWrite(verdes, HIGH);
   }
 
-
-  // Exibe os valores no monitor serial
-  Serial.print("Dado: ");
-  Serial.println(cmMsec);
-
-
   // ======================
-  // ENVIO MQTT
+  // ENVIO MQTT REAL
   // ======================
   client.publish(topico, String(cmMsec).c_str());
-  Serial.println("Dados enviados MQTT!");
-  // Aguarda 2 segundos
+  Serial.println("Dados enviados ao MQTT!");
+  
+  // Aguarda 2 segundos para a próxima leitura estruturada
   delay(2000);
 }
